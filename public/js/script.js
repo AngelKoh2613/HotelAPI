@@ -191,7 +191,7 @@ document.addEventListener('DOMContentLoaded', function() {
                   <h3>Cuarto ${room.number}</h3>
                   <p><i class="fas fa-tag"></i> ${room.type}</p>
                   <p><i class="fas fa-user-friends"></i> ${room.capacity} persona${room.capacity > 1 ? 's' : ''}</p>
-                  <p class="room-price"><i class="fas fa-money-bill-wave"></i> $${room.price.toFixed(2)}/noche</p>
+                  <p class="room-price"><i class="fas fa-money-bill-wave"></i> $${(room.price ?? 0).toFixed(2)}/noche</p>
               </div>
           `;
           

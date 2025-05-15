@@ -1,11 +1,12 @@
 const Room = require('../models/Room');
+const pool = require('../config/db');
 
 // @desc    Get all rooms
 // @route   GET /api/rooms
 // @access  Private
 const getRooms = async (req, res, next) => {
   try {
-    const rooms = await Room.find().sort({ number: 1 });
+    const rooms = await Room.findAll();
     res.json(rooms);
   } catch (err) {
     next(err);
@@ -34,9 +35,13 @@ const createRoom = async (req, res, next) => {
   try {
     const { number, type, capacity, price, services, status } = req.body;
 
-    // Check if room number already exists
-    const roomExists = await Room.findOne({ number });
-    if (roomExists) {
+    // Verificar si el número de habitación ya existe
+    const [existingRooms] = await pool.query(
+      'SELECT id FROM cuartos WHERE numero = ?',
+      [number]
+    );
+    
+    if (existingRooms.length > 0) {
       return res.status(400).json({ message: 'Room number already exists' });
     }
 
@@ -68,23 +73,27 @@ const updateRoom = async (req, res, next) => {
       return res.status(404).json({ message: 'Room not found' });
     }
 
-    // Check if room number is being changed to one that already exists
+    // Verificar si el nuevo número de habitación ya existe
     if (number && room.number !== number) {
-      const roomExists = await Room.findOne({ number });
-      if (roomExists) {
+      const [existingRooms] = await pool.query(
+        'SELECT id FROM cuartos WHERE numero = ? AND id != ?',
+        [number, req.params.id]
+      );
+      
+      if (existingRooms.length > 0) {
         return res.status(400).json({ message: 'Room number already exists' });
       }
     }
 
-    room.number = number || room.number;
-    room.type = type || room.type;
-    room.capacity = capacity || room.capacity;
-    room.price = price || room.price;
-    room.services = services || room.services;
-    room.status = status || room.status;
-    room.image = req.body.image || room.image;
+    const updatedRoom = await Room.update(req.params.id, {
+      number: number || room.number,
+      type: type || room.type,
+      capacity: capacity || room.capacity,
+      price: price || room.price,
+      status: status || room.status,
+      image: req.body.image || room.image
+    }, services || room.services);
 
-    const updatedRoom = await room.save();
     res.json(updatedRoom);
   } catch (err) {
     next(err);
@@ -101,61 +110,123 @@ const deleteRoom = async (req, res, next) => {
       return res.status(404).json({ message: 'Room not found' });
     }
 
-    await room.remove();
+    // Verificar si la habitación está ocupada
+    if (room.status === 'Ocupado') {
+      return res.status(400).json({ message: 'Cannot delete an occupied room' });
+    }
+
+    await Room.delete(req.params.id);
     res.json({ message: 'Room removed' });
   } catch (err) {
     next(err);
   }
 };
 
-// @desc    Occupy a room
-// @route   PUT /api/rooms/:id/occupy
-// @access  Private
+// @desc    Occupy a room (check-in)
+// @route   POST /api/rooms/:id/occupy
+// @access  Private/Receptionist
 const occupyRoom = async (req, res, next) => {
   try {
-    const { nights, guestId } = req.body;
+    const { guestId, nights } = req.body;
+    const roomId = req.params.id;
 
-    const room = await Room.findById(req.params.id);
-    if (!room) {
+    // Verificar que la habitación existe y está disponible
+    const [roomRows] = await pool.query(
+      'SELECT id, estado FROM cuartos WHERE id = ?',
+      [roomId]
+    );
+    
+    if (roomRows.length === 0) {
       return res.status(404).json({ message: 'Room not found' });
     }
-
-    if (room.status !== 'Disponible') {
+    
+    if (roomRows[0].estado !== 'Disponible') {
       return res.status(400).json({ message: 'Room is not available' });
     }
 
-    room.status = 'Ocupado';
-    room.nights = nights;
-    room.checkInDate = new Date();
-    room.guest = guestId;
+    // Verificar que el huésped existe
+    const [guestRows] = await pool.query(
+      'SELECT id FROM huespedes WHERE id = ?',
+      [guestId]
+    );
+    
+    if (guestRows.length === 0) {
+      return res.status(404).json({ message: 'Guest not found' });
+    }
 
-    const updatedRoom = await room.save();
-    res.json(updatedRoom);
+    // Crear la ocupación
+    const [result] = await pool.query(
+      'INSERT INTO ocupaciones (cuarto_id, huesped_id, fecha_checkin, noches, estado) VALUES (?, ?, NOW(), ?, "Activa")',
+      [roomId, guestId, nights]
+    );
+
+    // Actualizar estado de la habitación
+    await pool.query(
+      'UPDATE cuartos SET estado = "Ocupado" WHERE id = ?',
+      [roomId]
+    );
+
+    // Obtener la ocupación creada con detalles del huésped
+    const [occupationRows] = await pool.query(`
+      SELECT o.*, h.nombre AS huesped_nombre, h.id_number AS huesped_identificacion
+      FROM ocupaciones o
+      JOIN huespedes h ON o.huesped_id = h.id
+      WHERE o.id = ?
+    `, [result.insertId]);
+
+    res.status(201).json({
+      message: 'Room occupied successfully',
+      occupation: occupationRows[0]
+    });
   } catch (err) {
     next(err);
   }
 };
 
-// @desc    Check out from a room
-// @route   PUT /api/rooms/:id/checkout
-// @access  Private
+// @desc    Check out from room
+// @route   POST /api/rooms/:id/checkout
+// @access  Private/Receptionist
 const checkOutRoom = async (req, res, next) => {
   try {
-    const room = await Room.findById(req.params.id);
-    if (!room) {
+    const roomId = req.params.id;
+
+    // Verificar que la habitación existe y está ocupada
+    const [roomRows] = await pool.query(
+      'SELECT id, estado FROM cuartos WHERE id = ?',
+      [roomId]
+    );
+    
+    if (roomRows.length === 0) {
       return res.status(404).json({ message: 'Room not found' });
     }
-
-    if (room.status !== 'Ocupado') {
+    
+    if (roomRows[0].estado !== 'Ocupado') {
       return res.status(400).json({ message: 'Room is not occupied' });
     }
 
-    // Calculate balance
-    const stayTotal = room.nights * room.price;
-    const productsTotal = room.products.reduce((sum, product) => sum + product.price, 0);
-    const extrasTotal = room.extras.reduce((sum, extra) => sum + extra.amount, 0);
-    const paymentsTotal = room.payments.reduce((sum, payment) => sum + payment.amount, 0);
-    const balance = (stayTotal + productsTotal + extrasTotal) - paymentsTotal;
+    // Obtener la ocupación activa
+    const [occupationRows] = await pool.query(
+      'SELECT id FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
+      [roomId]
+    );
+    
+    if (occupationRows.length === 0) {
+      return res.status(400).json({ message: 'No active occupation found for this room' });
+    }
+    
+    const occupationId = occupationRows[0].id;
+
+    // Calcular el balance pendiente
+    const [balanceResult] = await pool.query(`
+      SELECT 
+        (SELECT c.precio * o.noches FROM cuartos c WHERE c.id = ?) AS stay_total,
+        COALESCE((SELECT SUM(pc.precio) FROM productos_consumidos pc WHERE pc.ocupacion_id = ?), 0) AS products_total,
+        COALESCE((SELECT SUM(ce.monto) FROM cargos_extras ce WHERE ce.ocupacion_id = ?), 0) AS extras_total,
+        COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.ocupacion_id = ?), 0) AS payments_total
+    `, [roomId, occupationId, occupationId, occupationId]);
+    
+    const { stay_total, products_total, extras_total, payments_total } = balanceResult[0];
+    const balance = (stay_total + products_total + extras_total) - payments_total;
 
     if (balance > 0) {
       return res.status(400).json({ 
@@ -164,106 +235,190 @@ const checkOutRoom = async (req, res, next) => {
       });
     }
 
-    room.status = 'Disponible';
-    room.nights = 0;
-    room.checkInDate = null;
-    room.guest = null;
-    room.products = [];
-    room.extras = [];
-    room.payments = [];
+    // Finalizar la ocupación
+    await pool.query(
+      'UPDATE ocupaciones SET estado = "Finalizada", fecha_checkout = NOW() WHERE id = ?',
+      [occupationId]
+    );
 
-    const updatedRoom = await room.save();
-    res.json(updatedRoom);
+    // Liberar la habitación
+    await pool.query(
+      'UPDATE cuartos SET estado = "Disponible" WHERE id = ?',
+      [roomId]
+    );
+
+    res.json({ 
+      message: 'Check-out completed successfully',
+      roomId: roomId,
+      occupationId: occupationId
+    });
   } catch (err) {
     next(err);
   }
 };
 
-// @desc    Add product to room
+// @desc    Add consumed product
 // @route   POST /api/rooms/:id/products
-// @access  Private
+// @access  Private/Receptionist
 const addProduct = async (req, res, next) => {
   try {
     const { name, price } = req.body;
+    const roomId = req.params.id;
 
-    const room = await Room.findById(req.params.id);
-    if (!room) {
+    // Verificar que la habitación existe y está ocupada
+    const [roomRows] = await pool.query(
+      'SELECT id, estado FROM cuartos WHERE id = ?',
+      [roomId]
+    );
+    
+    if (roomRows.length === 0) {
       return res.status(404).json({ message: 'Room not found' });
     }
-
-    if (room.status !== 'Ocupado') {
+    
+    if (roomRows[0].estado !== 'Ocupado') {
       return res.status(400).json({ message: 'Room is not occupied' });
     }
 
-    room.products.push({ name, price });
-    const updatedRoom = await room.save();
-    res.json(updatedRoom);
+    // Obtener la ocupación activa
+    const [occupationRows] = await pool.query(
+      'SELECT id FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
+      [roomId]
+    );
+    
+    if (occupationRows.length === 0) {
+      return res.status(400).json({ message: 'No active occupation found for this room' });
+    }
+    
+    const occupationId = occupationRows[0].id;
+
+    // Registrar el producto consumido
+    const [result] = await pool.query(
+      'INSERT INTO productos_consumidos (cuarto_id, ocupacion_id, nombre, precio) VALUES (?, ?, ?, ?)',
+      [roomId, occupationId, name, price]
+    );
+
+    res.status(201).json({
+      message: 'Product added successfully',
+      productId: result.insertId
+    });
   } catch (err) {
     next(err);
   }
 };
 
-// @desc    Add extra charge to room
+// @desc    Add extra charge
 // @route   POST /api/rooms/:id/extras
-// @access  Private
+// @access  Private/Receptionist
 const addExtra = async (req, res, next) => {
   try {
-    const { description, amount } = req.body;
+    const { description, monto } = req.body;
+    const roomId = req.params.id;
 
-    const room = await Room.findById(req.params.id);
-    if (!room) {
+    // Verificar que la habitación existe y está ocupada
+    const [roomRows] = await pool.query(
+      'SELECT id, estado FROM cuartos WHERE id = ?',
+      [roomId]
+    );
+    
+    if (roomRows.length === 0) {
       return res.status(404).json({ message: 'Room not found' });
     }
-
-    if (room.status !== 'Ocupado') {
+    
+    if (roomRows[0].estado !== 'Ocupado') {
       return res.status(400).json({ message: 'Room is not occupied' });
     }
 
-    room.extras.push({ description, amount });
-    const updatedRoom = await room.save();
-    res.json(updatedRoom);
+    // Obtener la ocupación activa
+    const [occupationRows] = await pool.query(
+      'SELECT id FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
+      [roomId]
+    );
+    
+    if (occupationRows.length === 0) {
+      return res.status(400).json({ message: 'No active occupation found for this room' });
+    }
+    
+    const occupationId = occupationRows[0].id;
+
+    // Registrar el cargo extra
+    const [result] = await pool.query(
+      'INSERT INTO cargos_extras (cuarto_id, ocupacion_id, descripcion, monto) VALUES (?, ?, ?, ?)',
+      [roomId, occupationId, description, monto]
+    );
+
+    res.status(201).json({
+      message: 'Extra charge added successfully',
+      extraId: result.insertId
+    });
   } catch (err) {
     next(err);
   }
 };
 
-// @desc    Add payment to room
+// @desc    Add payment
 // @route   POST /api/rooms/:id/payments
-// @access  Private
+// @access  Private/Receptionist
 const addPayment = async (req, res, next) => {
   try {
-    const { amount } = req.body;
+    const { monto, metodo_pago } = req.body;
+    const roomId = req.params.id;
 
-    const room = await Room.findById(req.params.id);
-    if (!room) {
+    // Verificar que la habitación existe y está ocupada
+    const [roomRows] = await pool.query(
+      'SELECT id, estado FROM cuartos WHERE id = ?',
+      [roomId]
+    );
+    
+    if (roomRows.length === 0) {
       return res.status(404).json({ message: 'Room not found' });
     }
-
-    if (room.status !== 'Ocupado') {
+    
+    if (roomRows[0].estado !== 'Ocupado') {
       return res.status(400).json({ message: 'Room is not occupied' });
     }
 
-    // Calculate current balance
-    const stayTotal = room.nights * room.price;
-    const productsTotal = room.products.reduce((sum, product) => sum + product.price, 0);
-    const extrasTotal = room.extras.reduce((sum, extra) => sum + extra.amount, 0);
-    const paymentsTotal = room.payments.reduce((sum, payment) => sum + payment.amount, 0);
-    const currentBalance = (stayTotal + productsTotal + extrasTotal) - paymentsTotal;
+    // Obtener la ocupación activa
+    const [occupationRows] = await pool.query(
+      'SELECT id FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
+      [roomId]
+    );
+    
+    if (occupationRows.length === 0) {
+      return res.status(400).json({ message: 'No active occupation found for this room' });
+    }
+    
+    const occupationId = occupationRows[0].id;
 
-    if (amount > currentBalance) {
+    // Calcular el balance actual
+    const [balanceResult] = await pool.query(`
+      SELECT 
+        (SELECT c.precio * o.noches FROM cuartos c WHERE c.id = ?) AS stay_total,
+        COALESCE((SELECT SUM(pc.precio) FROM productos_consumidos pc WHERE pc.ocupacion_id = ?), 0) AS products_total,
+        COALESCE((SELECT SUM(ce.monto) FROM cargos_extras ce WHERE ce.ocupacion_id = ?), 0) AS extras_total,
+        COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.ocupacion_id = ?), 0) AS payments_total
+    `, [roomId, occupationId, occupationId, occupationId]);
+    
+    const { stay_total, products_total, extras_total, payments_total } = balanceResult[0];
+    const currentBalance = (stay_total + products_total + extras_total) - payments_total;
+
+    if (monto > currentBalance) {
       return res.status(400).json({ 
         message: `Payment amount exceeds current balance ($${currentBalance.toFixed(2)})`,
         maxAmount: currentBalance
       });
     }
 
-    room.payments.push({ 
-      amount,
-      date: new Date()
+    // Registrar el pago
+    const [result] = await pool.query(
+      'INSERT INTO pagos (cuarto_id, ocupacion_id, monto, metodo_pago) VALUES (?, ?, ?, ?)',
+      [roomId, occupationId, monto, metodo_pago]
+    );
+
+    res.status(201).json({
+      message: 'Payment added successfully',
+      paymentId: result.insertId,
+      newBalance: currentBalance - monto
     });
-    
-    const updatedRoom = await room.save();
-    res.json(updatedRoom);
   } catch (err) {
     next(err);
   }
