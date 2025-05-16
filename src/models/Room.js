@@ -23,56 +23,59 @@ class Room {
     if (roomRows.length === 0) return null;
     
     const room = this.mapBasicRoomFields(roomRows[0]);
-    
+
+    // Inicializar campos vacíos por defecto
+    room.nights = 0;
+    room.products = [];
+    room.extras = [];
+    room.payments = [];
+    room.guest = null;
+
     // Obtener información de ocupación activa si existe
     const [occupationRows] = await pool.query(`
-      SELECT o.*, h.nombre AS huesped_nombre, h.id_number AS huesped_identificacion
+      SELECT o.*, h.nombre AS huesped_nombre, h.id_number AS huesped_identificacion, h.imagen_url
       FROM ocupaciones o
-      JOIN huespedes h ON o.huesped_id = h.id
+      LEFT JOIN huespedes h ON o.huesped_id = h.id
       WHERE o.cuarto_id = ? AND o.estado = 'Activa'
     `, [id]);
     
     if (occupationRows.length > 0) {
       const occupation = occupationRows[0];
-      room.occupation = {
-        id: occupation.id,
-        guestId: occupation.huesped_id,
-        guestName: occupation.huesped_nombre,
-        guestIdNumber: occupation.huesped_identificacion,
-        checkInDate: occupation.fecha_checkin,
-        nights: occupation.noches,
-        checkOutDate: occupation.fecha_checkout,
-        status: occupation.estado
+      room.nights = occupation.noches;
+      room.guest = {
+        name: occupation.huesped_nombre,
+        idNumber: occupation.huesped_identificacion,
+        image: occupation.imagen_url
       };
-      
+
       // Obtener productos consumidos
       const [products] = await pool.query(
-        'SELECT * FROM productos_consumidos WHERE ocupacion_id = ?',
+        'SELECT nombre AS name, precio AS price FROM productos_consumidos WHERE ocupacion_id = ?',
         [occupation.id]
       );
       room.products = products;
-      
+
       // Obtener cargos extras
       const [extras] = await pool.query(
-        'SELECT * FROM cargos_extras WHERE ocupacion_id = ?',
+        'SELECT descripcion AS description, monto AS amount FROM cargos_extras WHERE ocupacion_id = ?',
         [occupation.id]
       );
       room.extras = extras;
-      
+
       // Obtener pagos
       const [payments] = await pool.query(
-        'SELECT * FROM pagos WHERE ocupacion_id = ?',
+        'SELECT monto AS amount, fecha_pago AS date FROM pagos WHERE ocupacion_id = ?',
         [occupation.id]
       );
       room.payments = payments;
     }
-    
+
     return room;
   }
 
   static async create({ number, type, capacity, price, services, status = 'Disponible', image }) {
     const [result] = await pool.query(
-      'INSERT INTO cuartos (numero, tipo, capacidad, precio, imagen_url, estado) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO cuartos (numero, tipo, capacidad, precio_noche, imagen_url, estado) VALUES (?, ?, ?, ?, ?, ?)',
       [number, type, capacity, price, image, status]
     );
 
@@ -87,7 +90,7 @@ class Room {
 
   static async update(id, { number, type, capacity, price, status, image }, services) {
     await pool.query(
-      'UPDATE cuartos SET numero = ?, tipo = ?, capacidad = ?, precio = ?, estado = ?, imagen_url = ? WHERE id = ?',
+      'UPDATE cuartos SET numero = ?, tipo = ?, capacidad = ?, precio_noche = ?, estado = ?, imagen_url = ? WHERE id = ?',
       [number, type, capacity, price, status, image, id]
     );
 

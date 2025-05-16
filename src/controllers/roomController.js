@@ -1,6 +1,11 @@
 const Room = require('../models/Room');
 const pool = require('../config/db');
 
+function isValidRoomId(roomId) {
+  const num = Number(roomId);
+  return Number.isInteger(num) && num > 0;
+}
+
 // @desc    Get all rooms
 // @route   GET /api/rooms
 // @access  Private
@@ -17,8 +22,12 @@ const getRooms = async (req, res, next) => {
 // @route   GET /api/rooms/:id
 // @access  Private
 const getRoomById = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
-    const room = await Room.findById(req.params.id);
+    const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ message: 'Room not found' });
     }
@@ -65,6 +74,10 @@ const createRoom = async (req, res, next) => {
 // @route   PUT /api/rooms/:id
 // @access  Private/Admin
 const updateRoom = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const { number, type, capacity, price, services, status } = req.body;
 
@@ -104,6 +117,10 @@ const updateRoom = async (req, res, next) => {
 // @route   DELETE /api/rooms/:id
 // @access  Private/Admin
 const deleteRoom = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const room = await Room.findById(req.params.id);
     if (!room) {
@@ -126,9 +143,12 @@ const deleteRoom = async (req, res, next) => {
 // @route   POST /api/rooms/:id/occupy
 // @access  Private/Receptionist
 const occupyRoom = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const { guestId, nights } = req.body;
-    const roomId = req.params.id;
 
     // Verificar que la habitación existe y está disponible
     const [roomRows] = await pool.query(
@@ -144,20 +164,23 @@ const occupyRoom = async (req, res, next) => {
       return res.status(400).json({ message: 'Room is not available' });
     }
 
-    // Verificar que el huésped existe
-    const [guestRows] = await pool.query(
-      'SELECT id FROM huespedes WHERE id = ?',
-      [guestId]
-    );
-    
-    if (guestRows.length === 0) {
-      return res.status(404).json({ message: 'Guest not found' });
+    // Si guestId no se envía, permite ocupar el cuarto sin huésped
+    let guestOk = true;
+    if (guestId) {
+      const [guestRows] = await pool.query(
+        'SELECT id FROM huespedes WHERE id = ?',
+        [guestId]
+      );
+      guestOk = guestRows.length > 0;
+      if (!guestOk) {
+        return res.status(404).json({ message: 'Guest not found' });
+      }
     }
 
-    // Crear la ocupación
+    // Crear la ocupación (puede ser con guestId o null)
     const [result] = await pool.query(
       'INSERT INTO ocupaciones (cuarto_id, huesped_id, fecha_checkin, noches, estado) VALUES (?, ?, NOW(), ?, "Activa")',
-      [roomId, guestId, nights]
+      [roomId, guestId || null, nights]
     );
 
     // Actualizar estado de la habitación
@@ -166,17 +189,8 @@ const occupyRoom = async (req, res, next) => {
       [roomId]
     );
 
-    // Obtener la ocupación creada con detalles del huésped
-    const [occupationRows] = await pool.query(`
-      SELECT o.*, h.nombre AS huesped_nombre, h.id_number AS huesped_identificacion
-      FROM ocupaciones o
-      JOIN huespedes h ON o.huesped_id = h.id
-      WHERE o.id = ?
-    `, [result.insertId]);
-
     res.status(201).json({
-      message: 'Room occupied successfully',
-      occupation: occupationRows[0]
+      message: 'Room occupied successfully'
     });
   } catch (err) {
     next(err);
@@ -187,9 +201,11 @@ const occupyRoom = async (req, res, next) => {
 // @route   POST /api/rooms/:id/checkout
 // @access  Private/Receptionist
 const checkOutRoom = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
-    const roomId = req.params.id;
-
     // Verificar que la habitación existe y está ocupada
     const [roomRows] = await pool.query(
       'SELECT id, estado FROM cuartos WHERE id = ?',
@@ -206,7 +222,7 @@ const checkOutRoom = async (req, res, next) => {
 
     // Obtener la ocupación activa
     const [occupationRows] = await pool.query(
-      'SELECT id FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
+      'SELECT id, noches FROM ocupaciones WHERE cuarto_id = ? AND estado = "Activa"',
       [roomId]
     );
     
@@ -215,15 +231,16 @@ const checkOutRoom = async (req, res, next) => {
     }
     
     const occupationId = occupationRows[0].id;
+    const noches = occupationRows[0].noches;
 
     // Calcular el balance pendiente
     const [balanceResult] = await pool.query(`
       SELECT 
-        (SELECT c.precio * o.noches FROM cuartos c WHERE c.id = ?) AS stay_total,
+        (SELECT c.precio_noche FROM cuartos c WHERE c.id = ?) * ? AS stay_total,
         COALESCE((SELECT SUM(pc.precio) FROM productos_consumidos pc WHERE pc.ocupacion_id = ?), 0) AS products_total,
         COALESCE((SELECT SUM(ce.monto) FROM cargos_extras ce WHERE ce.ocupacion_id = ?), 0) AS extras_total,
         COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.ocupacion_id = ?), 0) AS payments_total
-    `, [roomId, occupationId, occupationId, occupationId]);
+    `, [roomId, noches, occupationId, occupationId, occupationId]);
     
     const { stay_total, products_total, extras_total, payments_total } = balanceResult[0];
     const balance = (stay_total + products_total + extras_total) - payments_total;
@@ -261,9 +278,12 @@ const checkOutRoom = async (req, res, next) => {
 // @route   POST /api/rooms/:id/products
 // @access  Private/Receptionist
 const addProduct = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const { name, price } = req.body;
-    const roomId = req.params.id;
 
     // Verificar que la habitación existe y está ocupada
     const [roomRows] = await pool.query(
@@ -310,9 +330,12 @@ const addProduct = async (req, res, next) => {
 // @route   POST /api/rooms/:id/extras
 // @access  Private/Receptionist
 const addExtra = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const { description, monto } = req.body;
-    const roomId = req.params.id;
 
     // Verificar que la habitación existe y está ocupada
     const [roomRows] = await pool.query(
@@ -359,9 +382,12 @@ const addExtra = async (req, res, next) => {
 // @route   POST /api/rooms/:id/payments
 // @access  Private/Receptionist
 const addPayment = async (req, res, next) => {
+  const roomId = req.params.id;
+  if (!isValidRoomId(roomId)) {
+    return res.status(400).json({ message: 'ID de cuarto inválido' });
+  }
   try {
     const { monto, metodo_pago } = req.body;
-    const roomId = req.params.id;
 
     // Verificar que la habitación existe y está ocupada
     const [roomRows] = await pool.query(
@@ -392,8 +418,8 @@ const addPayment = async (req, res, next) => {
     // Calcular el balance actual
     const [balanceResult] = await pool.query(`
       SELECT 
-        (SELECT c.precio * o.noches FROM cuartos c WHERE c.id = ?) AS stay_total,
-        COALESCE((SELECT SUM(pc.precio) FROM productos_consumidos pc WHERE pc.ocupacion_id = ?), 0) AS products_total,
+        (SELECT c.precio_noche * o.noches FROM cuartos c WHERE c.id = ?) AS stay_total,
+        COALESCE((SELECT SUM(pc.precio_noche) FROM productos_consumidos pc WHERE pc.ocupacion_id = ?), 0) AS products_total,
         COALESCE((SELECT SUM(ce.monto) FROM cargos_extras ce WHERE ce.ocupacion_id = ?), 0) AS extras_total,
         COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.ocupacion_id = ?), 0) AS payments_total
     `, [roomId, occupationId, occupationId, occupationId]);

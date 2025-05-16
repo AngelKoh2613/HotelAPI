@@ -166,39 +166,39 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Renderizar habitaciones
   function renderRooms(rooms = []) {
-      roomsGrid.innerHTML = '';
-      
-      if (rooms.length === 0) {
-          roomsGrid.innerHTML = '<p class="no-rooms">No se encontraron cuartos</p>';
-          return;
-      }
-      
-      rooms.forEach(room => {
-          const roomCard = document.createElement('div');
-          roomCard.className = 'room-card';
-          roomCard.dataset.id = room._id;
-          
-          let statusClass = '';
-          if (room.status === 'Disponible') statusClass = 'status-available';
-          else if (room.status === 'Ocupado') statusClass = 'status-occupied';
-          else if (room.status === 'Mantenimiento') statusClass = 'status-maintenance';
-          
-          roomCard.innerHTML = `
-              <div class="room-image" style="background-image: url('${room.image}')">
-                  <span class="room-badge ${statusClass}">${room.status}</span>
-              </div>
-              <div class="room-info">
-                  <h3>Cuarto ${room.number}</h3>
-                  <p><i class="fas fa-tag"></i> ${room.type}</p>
-                  <p><i class="fas fa-user-friends"></i> ${room.capacity} persona${room.capacity > 1 ? 's' : ''}</p>
-                  <p class="room-price"><i class="fas fa-money-bill-wave"></i> $${(room.price ?? 0).toFixed(2)}/noche</p>
-              </div>
-          `;
-          
-          roomCard.addEventListener('click', () => showRoomDetails(room._id));
-          roomsGrid.appendChild(roomCard);
-      });
-  }
+    roomsGrid.innerHTML = '';
+    
+    if (rooms.length === 0) {
+        roomsGrid.innerHTML = '<p class="no-rooms">No se encontraron cuartos</p>';
+        return;
+    }
+    
+    rooms.forEach(room => {
+        const roomCard = document.createElement('div');
+        roomCard.className = 'room-card';
+        roomCard.dataset.id = room.id; // <--- Cambia _id por id
+
+        let statusClass = '';
+        if (room.status === 'Disponible') statusClass = 'status-available';
+        else if (room.status === 'Ocupado') statusClass = 'status-occupied';
+        else if (room.status === 'Mantenimiento') statusClass = 'status-maintenance';
+        
+        roomCard.innerHTML = `
+            <div class="room-image" style="background-image: url('${room.image}')">
+                <span class="room-badge ${statusClass}">${room.status}</span>
+            </div>
+            <div class="room-info">
+                <h3>Cuarto ${room.number}</h3>
+                <p><i class="fas fa-tag"></i> ${room.type}</p>
+                <p><i class="fas fa-user-friends"></i> ${room.capacity} persona${room.capacity > 1 ? 's' : ''}</p>
+                <p class="room-price"><i class="fas fa-money-bill-wave"></i> $${(room.price ?? 0).toFixed(2)}/noche</p>
+            </div>
+        `;
+        
+        roomCard.addEventListener('click', () => showRoomDetails(Number(room.id))); // <--- Cambia _id por id
+        roomsGrid.appendChild(roomCard);
+    });
+}
 
   // Filtrar habitaciones
   function filterRooms() {
@@ -213,6 +213,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Mostrar detalles de habitación
   async function showRoomDetails(roomId) {
+      if (!isValidRoomId(roomId)) {
+        showNotification('ID de cuarto inválido', 'error');
+        return;
+      }
       try {
           const response = await fetch(`${API_BASE_URL}/rooms/${roomId}`, {
               credentials: 'include'
@@ -221,7 +225,7 @@ document.addEventListener('DOMContentLoaded', function() {
           if (!response.ok) throw new Error('Error al cargar los detalles de la habitación');
           
           const room = await response.json();
-          currentRoomId = room._id;
+          currentRoomId = Number(room.id);
           detailsPlaceholder.style.display = 'none';
           detailsContent.style.display = 'flex';
           
@@ -302,54 +306,56 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Actualizar lista de productos
   function updateProductsList(room) {
-      const productsList = document.getElementById('productsList');
-      productsList.innerHTML = '';
-      
-      room.products.forEach((product, index) => {
-          const li = document.createElement('li');
-          li.innerHTML = `
-              <span>${product.name}</span>
-              <span>$${product.price.toFixed(2)}</span>
-              <button class="btn btn-icon btn-sm remove-product" data-index="${index}">
-                  <i class="fas fa-times"></i>
-              </button>
-          `;
-          productsList.appendChild(li);
-      });
-      
-      // Agregar event listeners a los botones de eliminar
-      document.querySelectorAll('.remove-product').forEach(btn => {
-          btn.addEventListener('click', function() {
-              const index = parseInt(this.dataset.index);
-              removeProduct(index);
-          });
-      });
-  }
+    const productsList = document.getElementById('productsList');
+    productsList.innerHTML = '';
+    
+    room.products.forEach((product, index) => {
+        const price = Number(product.price) || 0;
+        const li = document.createElement('li');
+        li.innerHTML = `
+            <span>${product.name}</span>
+            <span>$${price.toFixed(2)}</span>
+            <button class="btn btn-icon btn-sm remove-product" data-index="${index}">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        productsList.appendChild(li);
+    });
+    
+    // Agregar event listeners a los botones de eliminar
+    document.querySelectorAll('.remove-product').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const index = parseInt(this.dataset.index);
+            removeProduct(index);
+        });
+    });
+}
 
   // Actualizar lista de extras
   function updateExtrasList(room) {
-      const extrasList = document.getElementById('extrasList');
-      extrasList.innerHTML = '';
-      
-      room.extras.forEach((extra, index) => {
-          const li = document.createElement('li');
-          li.innerHTML = `
-              <span>${extra.description}</span>
-              <span>$${extra.amount.toFixed(2)}</span>
-              <button class="btn btn-icon btn-sm remove-extra" data-index="${index}">
-                  <i class="fas fa-times"></i>
-              </button>
-          `;
-          extrasList.appendChild(li);
-      });
-      
-      // Agregar event listeners a los botones de eliminar
-      document.querySelectorAll('.remove-extra').forEach(btn => {
-          btn.addEventListener('click', function() {
-              const index = parseInt(this.dataset.index);
-              removeExtra(index);
-          });
-      });
+    const extrasList = document.getElementById('extrasList');
+    extrasList.innerHTML = '';
+    
+    room.extras.forEach((extra, index) => {
+        const amount = Number(extra.amount) || 0;
+        const li = document.createElement('li');
+        li.innerHTML = `
+            <span>${extra.description}</span>
+            <span>$${amount.toFixed(2)}</span>
+            <button class="btn btn-icon btn-sm remove-extra" data-index="${index}">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        extrasList.appendChild(li);
+    });
+    
+    // Agregar event listeners a los botones de eliminar
+    document.querySelectorAll('.remove-extra').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const index = parseInt(this.dataset.index);
+            removeExtra(index);
+        });
+    });
   }
 
   // Actualizar lista de pagos
@@ -358,10 +364,11 @@ document.addEventListener('DOMContentLoaded', function() {
       paymentsList.innerHTML = '';
       
       room.payments.forEach((payment, index) => {
+          const amount = Number(payment.amount) || 0;
           const li = document.createElement('li');
           li.innerHTML = `
               <span>${new Date(payment.date).toLocaleDateString()}</span>
-              <span>$${payment.amount.toFixed(2)}</span>
+              <span>$${amount.toFixed(2)}</span>
               <button class="btn btn-icon btn-sm remove-payment" data-index="${index}">
                   <i class="fas fa-times"></i>
               </button>
@@ -474,26 +481,31 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Ocupar habitación
   async function occupyRoom() {
+      if (!isValidRoomId(currentRoomId)) {
+          showNotification('ID de cuarto inválido', 'error');
+          return;
+      }
       try {
           const nights = parseInt(nightsInput.value);
           if (isNaN(nights) || nights < 1) {
               throw new Error('Ingrese un número válido de noches');
           }
-          
+
+          // No pedir guestId, solo enviar nights
           const response = await fetch(`${API_BASE_URL}/rooms/${currentRoomId}/occupy`, {
               method: 'PUT',
               headers: {
                   'Content-Type': 'application/json'
               },
-              body: JSON.stringify({ nights }),
+              body: JSON.stringify({ nights }), // Solo nights
               credentials: 'include'
           });
-          
+
           if (!response.ok) {
               const errorData = await response.json();
               throw new Error(errorData.message || 'Error al ocupar la habitación');
           }
-          
+
           const room = await response.json();
           nightsModal.style.display = 'none';
           fetchRooms();
@@ -506,24 +518,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Desocupar habitación
   async function checkOutRoom() {
-      try {
-          const response = await fetch(`${API_BASE_URL}/rooms/${currentRoomId}/checkout`, {
-              method: 'PUT',
-              credentials: 'include'
-          });
-          
-          if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.message || 'Error al desocupar la habitación');
-          }
-          
-          const room = await response.json();
-          fetchRooms();
-          showRoomDetails(currentRoomId);
-          showNotification('Cuarto desocupado correctamente');
-      } catch (error) {
-          showNotification(error.message, 'error');
-      }
+    if (!isValidRoomId(currentRoomId)) {
+        showNotification('ID de cuarto inválido', 'error');
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE_URL}/rooms/${currentRoomId}/checkout`, {
+            method: 'PUT',
+            credentials: 'include'
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            showNotification(errorData.message || 'Error al desocupar la habitación', 'error');
+            return; // <-- Detiene la ejecución si hay error
+        }
+
+        const room = await response.json();
+        fetchRooms();
+        showRoomDetails(currentRoomId);
+        showNotification('Habitación desocupada correctamente');
+    } catch (error) {
+        showNotification(error.message, 'error');
+    }
   }
 
   // Actualizar información de cuenta
@@ -540,10 +557,16 @@ document.addEventListener('DOMContentLoaded', function() {
       if (room.status === 'Ocupado') {
           accountSection.style.display = 'block';
           
-          const stayTotal = room.nights * room.price;
-          const productsTotal = room.products.reduce((sum, product) => sum + product.price, 0);
-          const extrasTotal = room.extras.reduce((sum, extra) => sum + extra.amount, 0);
-          const paymentsTotal = room.payments.reduce((sum, payment) => sum + payment.amount, 0);
+          const stayTotal = Number(room.nights) * Number(room.price);
+          const productsTotal = Array.isArray(room.products)
+              ? room.products.reduce((sum, product) => sum + (Number(product.price) || 0), 0)
+              : 0;
+          const extrasTotal = Array.isArray(room.extras)
+              ? room.extras.reduce((sum, extra) => sum + (Number(extra.amount) || 0), 0)
+              : 0;
+          const paymentsTotal = Array.isArray(room.payments)
+              ? room.payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0)
+              : 0;
           const total = stayTotal + productsTotal + extrasTotal;
           const balance = Math.max(0, total - paymentsTotal);
           
@@ -749,7 +772,7 @@ document.addEventListener('DOMContentLoaded', function() {
               
               const room = await response.json();
               
-              document.getElementById('roomId').value = room._id;
+              document.getElementById('roomId').value = room.id;
               document.getElementById('roomNumber').value = room.number;
               document.getElementById('roomType').value = room.type;
               document.getElementById('roomCapacity').value = room.capacity;
@@ -839,6 +862,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Eliminar habitación
   async function deleteRoom() {
+    if (!isValidRoomId(currentRoomId)) {
+        showNotification('ID de cuarto inválido', 'error');
+        return;
+    }
       if (!currentRoomId) return;
       
       if (!confirm('¿Está seguro de eliminar este cuarto? Esta acción no se puede deshacer.')) {
@@ -908,4 +935,17 @@ document.addEventListener('DOMContentLoaded', function() {
           setTimeout(() => notification.remove(), 300);
       }, 3000);
   }
+
+  // Validar ID de cuarto
+  function validateRoomId() {
+      if (!currentRoomId || isNaN(Number(currentRoomId))) {
+          showNotification('ID de cuarto inválido', 'error');
+          return;
+      }
+  }
+
+  function isValidRoomId(id) {
+    const num = Number(id);
+    return Number.isInteger(num) && num > 0;
+}
 });

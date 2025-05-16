@@ -37,7 +37,7 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
     }
 
     // Redirección después de login exitoso
-    window.location.href = "..public/index.html";
+    window.location.href = "/";
     
   } catch (error) {
     errorMsg.textContent = error.message.includes('Credenciales inválidas') 
